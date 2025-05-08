@@ -23,7 +23,7 @@ COPY . .
 # 6. 使用 uv sync 安装项目依赖
 # uv sync 会根据 pyproject.toml (以及 uv.lock, 如果存在) 来同步环境中的依赖。
 # --system 标志指示 uv 将包安装到 Docker 镜像的基础 Python 环境中。
-RUN uv sync
+RUN uv sync --system --locked
 # 如果您使用了 uv.lock 并希望强制使用它:
 # RUN uv sync --system --locked
 
