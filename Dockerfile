@@ -36,4 +36,4 @@ RUN uv sync
 EXPOSE 15400
 
 # 9. 定义容器启动时执行的命令
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "15400"]
+CMD ["python", "main.py"]
