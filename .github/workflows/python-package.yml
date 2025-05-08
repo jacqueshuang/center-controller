@@ -37,7 +37,7 @@ jobs:
           # 将 owner转换为小写，GHCR 推荐
           IMAGE_REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           # 【重要】请将 'your-app-name' 替换为您应用的实际名称
-          IMAGE_NAME_BASE="your-app-name" 
+          IMAGE_NAME_BASE="conter-controller" 
           
           # 获取 Release 标签 (例如 "v1.0.0")
           # 对于 release 事件, github.ref_name 包含的就是 tag 名称
