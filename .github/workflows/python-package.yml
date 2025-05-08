@@ -1,0 +1,98 @@
+# .github/workflows/docker-release-with-tar.yml
+name: Build Docker, Push to GHCR, and Upload Tar to Release
+
+on:
+  release:
+    types: [published] # 当一个新的 Release 被发布时触发
+  workflow_dispatch:   # 允许从 Actions 标签页手动触发
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read      # 读取仓库内容
+      packages: write     # 写入 GitHub Packages (GHCR)，如果启用了推送
+      # actions/upload-release-asset@v1 需要权限来上传附件到 release
+      # GITHUB_TOKEN 默认应该有此权限，当事件是 release 时。
+      # 如果遇到权限问题，可能需要 contents: write 或特定于 release 的权限。
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        # 如果您不想推送到 GHCR，可以注释掉或删除此步骤，并在 build-push-action 中设置 push: false
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare image and asset names
+        id: prep_names
+        run: |
+          # 将 owner转换为小写，GHCR 推荐
+          IMAGE_REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          # 【重要】请将 'your-app-name' 替换为您应用的实际名称
+          IMAGE_NAME_BASE="your-app-name" 
+          
+          # 获取 Release 标签 (例如 "v1.0.0")
+          # 对于 release 事件, github.ref_name 包含的就是 tag 名称
+          # 对于 workflow_dispatch, 如果需要 tag, 你可能需要一个 input，或使用其他逻辑 (如 commit SHA)
+          local_tag=""
+          if [ "${{ github.event_name }}" == "release" ]; then
+            local_tag="${{ github.ref_name }}"
+          else
+            # 对于手动或其他触发，可以设置为 commit SHA 或其他默认值
+            local_tag="${{ github.sha }}" 
+          fi
+          
+          echo "IMAGE_TAG_SUFFIX=${local_tag}" >> $GITHUB_OUTPUT
+          echo "FULL_IMAGE_NAME_WITH_TAG=ghcr.io/${IMAGE_REPO_OWNER}/${IMAGE_NAME_BASE}:${local_tag}" >> $GITHUB_OUTPUT
+          echo "TAR_FILENAME=${IMAGE_NAME_BASE}-${local_tag}.tar" >> $GITHUB_OUTPUT
+          echo "GZ_FILENAME=${IMAGE_NAME_BASE}-${local_tag}.tar.gz" >> $GITHUB_OUTPUT
+        shell: bash
+
+
+      - name: Build and Push (or just Load) Docker Image
+        id: build_image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64 # 根据您的需求指定平台, 例如 linux/amd64,linux/arm64
+          push: true # 设置为 true 以推送到 GHCR。如果只想生成 tar 包，可以设为 false。
+          load: true   # 确保镜像在构建后加载到 runner 的本地 Docker 守护进程中，以便 docker save 使用。
+          tags: ${{ steps.prep_names.outputs.FULL_IMAGE_NAME_WITH_TAG }}
+          # (可选) 添加构建缓存
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
+
+      - name: Save Docker image to tar
+        run: |
+          echo "正在保存镜像 ${{ steps.prep_names.outputs.FULL_IMAGE_NAME_WITH_TAG }} 到 ${{ steps.prep_names.outputs.TAR_FILENAME }}"
+          docker save ${{ steps.prep_names.outputs.FULL_IMAGE_NAME_WITH_TAG }} -o ${{ steps.prep_names.outputs.TAR_FILENAME }}
+        shell: bash
+
+      - name: Compress Docker image tarball
+        run: |
+          echo "正在压缩 ${{ steps.prep_names.outputs.TAR_FILENAME }}..."
+          gzip -f ${{ steps.prep_names.outputs.TAR_FILENAME }}
+          echo "已压缩为: ${{ steps.prep_names.outputs.GZ_FILENAME }}"
+          ls -lh ${{ steps.prep_names.outputs.GZ_FILENAME }} # 显示压缩后文件的大小
+        shell: bash
+
+      - name: Upload Docker image tarball to Release
+        # 仅当工作流由 'release' 事件触发时才执行此步骤
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }} # Release 事件提供的上传 URL
+          asset_path: ./${{ steps.prep_names.outputs.GZ_FILENAME }} # 要上传的文件的路径
+          asset_name: ${{ steps.prep_names.outputs.GZ_FILENAME }} # 在 Release 中显示的附件名称
+          asset_content_type: application/gzip # 附件的内容类型
