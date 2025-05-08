@@ -9,31 +9,52 @@ ENV PYTHONDONTWRITEBYTECODE 1
 WORKDIR /app
 
 # 4. 安装 uv
-# 使用基础镜像中的 pip 来安装 uv。
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir uv
 
-# 5. 复制 pyproject.toml (以及 uv.lock, 如果您使用它)
-# 将 pyproject.toml 复制到工作目录。
-# 如果您在项目中使用 uv.lock 文件来锁定依赖版本以实现更可复现的构建，
-# 请务必也复制它。
-COPY . .
-# COPY uv.lock .  # 如果您有 uv.lock 文件，请取消此行的注释
+# 5. 优化层缓存：首先复制 pyproject.toml (和可选的 uv.lock)
+# 确保 pyproject.toml 位于您项目的根目录，并且会被复制到 /app/pyproject.toml
+COPY pyproject.toml .
+
+# 如果您确实在维护一个 uv.lock 文件，并希望在条件成熟时使用它，
+# 请取消下面一行的注释，并确保 uv.lock 文件已提交到您的仓库。
+# COPY uv.lock .
 
 # 6. 使用 uv sync 安装项目依赖
-# uv sync 会根据 pyproject.toml (以及 uv.lock, 如果存在) 来同步环境中的依赖。
-# --system 标志指示 uv 将包安装到 Docker 镜像的基础 Python 环境中。
-RUN uv sync --system --locked
-# 如果您使用了 uv.lock 并希望强制使用它:
-# RUN uv sync --system --locked
+# 注意：这里暂时移除了 --locked 标志，以避免因 uv.lock 文件问题导致的构建失败。
+# uv sync 会尝试根据 pyproject.toml 解析并安装依赖。
+# 【重要】请确保您的 pyproject.toml 文件中正确声明了 uvicorn (例如 uvicorn[standard]) 作为依赖！
+RUN echo "Attempting to install dependencies using 'uv sync --system'..." && \
+    uv sync --system && \
+    echo "Dependency installation with 'uv sync --system' completed."
 
-# 7. 复制应用程序的其余代码到工作目录
-# 这一步应该在安装依赖之后，以便更好地利用 Docker 的层缓存机制。
-# 如果您的 pyproject.toml 或 uv.lock 文件没有改变，Docker 不会重新运行上面的依赖安装步骤。
+# 如果您确认您的 uv.lock 文件是最新的且与 pyproject.toml 一致，
+# 并且希望强制使用锁文件以保证构建的精确可复现性（这是推荐的最佳实践），
+# 请注释掉上面的 'RUN uv sync --system'，并使用下面这行：
+# RUN echo "Attempting to install dependencies using 'uv sync --system --locked'..." && \
+#     uv sync --system --locked && \
+#     echo "Dependency installation with 'uv sync --system --locked' completed."
 
+# 7. 添加诊断命令，检查 uvicorn 安装情况
+# 将所有诊断命令合并到一个 RUN 指令中，减少层数并确保它们一起执行或失败
+RUN echo "---- DIAGNOSTICS AFTER UV SYNC ----" && \
+    echo "PATH is: $PATH" && \
+    echo "Running 'which uvicorn':" && \
+    (which uvicorn || echo "ERROR: uvicorn not found by 'which' command") && \
+    echo "Running 'uvicorn --version':" && \
+    (uvicorn --version || echo "ERROR: 'uvicorn --version' command FAILED") && \
+    echo "Searching for uvicorn in /usr/local (common install path):" && \
+    (find /usr/local -name uvicorn -ls || echo "uvicorn not found in /usr/local by find") && \
+    echo "Python site packages paths being used:" && \
+    python -m site && \
+    echo "---- DIAGNOSTICS END ----"
 
-# 8. 声明容器监听的端口
+# 8. 复制应用程序的其余代码
+# 现在依赖已经安装完毕，再复制应用代码。
+COPY . .
+
+# 9. 声明容器监听的端口
 EXPOSE 15400
 
-# 9. 定义容器启动时执行的命令
-CMD ["python", "main.py"]
+# 10. 定义容器启动时执行的命令
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "15400"]
